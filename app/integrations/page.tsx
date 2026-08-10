@@ -52,6 +52,35 @@ type ApiKeyRecord = {
   keyPreview: string;
 };
 
+type IngestionStatus = {
+  brainId: string;
+  graph: {
+    node_count: number;
+    relationship_count: number;
+    file_count: number;
+    github_files: number;
+    salesforce_files: number;
+    complete_files: number;
+    parsing_files: number;
+    failed_files: number;
+    latest_write: string | null;
+  };
+  github: {
+    status: string;
+    repository: string | null;
+    processed: number;
+    total: number | null;
+    failed: number;
+  };
+  salesforce: {
+    status: string;
+    stage: string | null;
+    processed: number;
+    total: number;
+    failures: number;
+  };
+};
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
 }
@@ -71,6 +100,9 @@ export default function IntegrationsAndSetupPage() {
   const [isGithubConnected, setIsGithubConnected] = useState(false);
   const [installationId, setInstallationId] = useState<string | null>(null);
   const [checkingGithub, setCheckingGithub] = useState(false);
+  const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null);
+  const [checkingIngestionStatus, setCheckingIngestionStatus] = useState(false);
+  const [ingestionStatusError, setIngestionStatusError] = useState<string | null>(null);
 
   // --- Salesforce State ---
   const [salesforceConnections, setSalesforceConnections] = useState<SalesforceConnectionResponse[]>([]);
@@ -157,6 +189,35 @@ export default function IntegrationsAndSetupPage() {
       }
     }
   }, [isLoaded, isSignedIn]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    void checkUnifiedIngestionStatus();
+    const interval = window.setInterval(() => {
+      void checkUnifiedIngestionStatus();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [isLoaded, isSignedIn]);
+
+  const checkUnifiedIngestionStatus = async () => {
+    setCheckingIngestionStatus(true);
+    setIngestionStatusError(null);
+    try {
+      const token = await getToken();
+      if (!token || !BASE_API) return;
+      const response = await fetch(`${BASE_API}/integrations/github/ingestion-status`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Failed to load ingestion status");
+      setIngestionStatus(await response.json());
+    } catch (error) {
+      console.error("Failed to load ingestion status", error);
+      setIngestionStatusError(getErrorMessage(error));
+    } finally {
+      setCheckingIngestionStatus(false);
+    }
+  };
 
   // --- API Functions (GitHub) ---
   const checkGithubConnection = async () => {
@@ -460,6 +521,108 @@ export default function IntegrationsAndSetupPage() {
               SETUP PROGRESS: {Math.round(Math.min(progressPercentage, 100))}%
             </p>
           </div>
+
+          {!ingestionStatus && checkingIngestionStatus && (
+            <section className="mb-8 rounded-2xl border border-cyan-500/20 bg-slate-950 p-8 text-center">
+              <Loader2 className="mx-auto h-7 w-7 animate-spin text-cyan-300" />
+              <h2 className="mt-3 font-semibold text-white">Reading ingestion progress</h2>
+              <p className="mt-1 text-sm text-slate-400">Checking GitHub, Salesforce, and the knowledge graph.</p>
+            </section>
+          )}
+
+          {!ingestionStatus && ingestionStatusError && (
+            <section className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-500/30 bg-amber-950/20 p-5">
+              <div>
+                <h2 className="font-semibold text-amber-200">Ingestion status is temporarily unavailable</h2>
+                <p className="mt-1 text-sm text-amber-100/60">{ingestionStatusError}</p>
+              </div>
+              <button onClick={() => void checkUnifiedIngestionStatus()} className="rounded-lg border border-amber-400/30 px-4 py-2 text-sm font-medium text-amber-100 hover:bg-amber-400/10">
+                Retry
+              </button>
+            </section>
+          )}
+
+          {ingestionStatus && (
+            <section className="mb-8 overflow-hidden rounded-2xl border border-cyan-500/30 bg-slate-950 shadow-[0_20px_70px_-35px_rgba(34,211,238,0.65)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-gradient-to-r from-cyan-950/60 via-slate-950 to-emerald-950/40 px-5 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-cyan-300">Live ingestion control</p>
+                  <h2 className="mt-1 text-lg font-semibold text-white">{ingestionStatus.brainId}</h2>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  {checkingIngestionStatus && <Loader2 className="h-4 w-4 animate-spin text-cyan-300" />}
+                  Auto-refreshing every 5 seconds
+                </div>
+              </div>
+
+              <div className="grid gap-4 p-5 lg:grid-cols-2">
+                {[
+                  {
+                    name: "GitHub repository",
+                    icon: Github,
+                    status: ingestionStatus.github.status,
+                    processed: ingestionStatus.github.processed,
+                    total: ingestionStatus.github.total,
+                    failed: ingestionStatus.github.failed,
+                    detail: ingestionStatus.github.repository || `${ingestionStatus.graph.github_files} repository files retained`,
+                  },
+                  {
+                    name: "Salesforce org",
+                    icon: Cloud,
+                    status: ingestionStatus.salesforce.status,
+                    processed: ingestionStatus.salesforce.processed,
+                    total: ingestionStatus.salesforce.total,
+                    failed: ingestionStatus.salesforce.failures,
+                    detail: ingestionStatus.salesforce.stage || `${ingestionStatus.graph.salesforce_files} Salesforce files retained`,
+                  },
+                ].map((source) => {
+                  const total = source.total || 0;
+                  const percent = total > 0 ? Math.min(100, Math.round((source.processed / total) * 100)) : null;
+                  const normalizedStatus = source.status.toUpperCase();
+                  const running = ["RUNNING", "IN_PROGRESS", "PENDING", "QUEUED"].includes(normalizedStatus);
+                  const notStarted = ["NOT_STARTED", "UNKNOWN"].includes(normalizedStatus);
+                  const SourceIcon = source.icon;
+                  return (
+                    <article key={source.name} className="rounded-xl border border-slate-800 bg-slate-900/80 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-lg border border-slate-700 bg-slate-950 p-2"><SourceIcon className="h-5 w-5 text-cyan-300" /></div>
+                          <div>
+                            <h3 className="font-semibold text-white">{source.name}</h3>
+                            <p className="mt-0.5 text-xs text-slate-400">{source.detail}</p>
+                          </div>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wider ${running ? "bg-cyan-400/10 text-cyan-300" : notStarted ? "bg-slate-700 text-slate-300" : source.failed ? "bg-amber-400/10 text-amber-300" : "bg-emerald-400/10 text-emerald-300"}`}>
+                          {running ? "INGESTING" : source.status.replaceAll("_", " ")}
+                        </span>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800">
+                        <div className={`h-full rounded-full transition-all duration-700 ${running ? "bg-cyan-400" : notStarted ? "bg-slate-600" : source.failed ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${percent ?? (running ? 12 : notStarted ? 0 : 100)}%` }} />
+                      </div>
+                      <div className="mt-2 flex justify-between text-xs text-slate-400">
+                        <span>{source.processed.toLocaleString()}{total ? ` / ${total.toLocaleString()}` : " processed"}</span>
+                        <span>{percent === null ? (running ? "In progress" : notStarted ? "Not started" : "Complete") : `${percent}%`}{source.failed ? ` · ${source.failed} failed` : ""}</span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-2 gap-px border-t border-slate-800 bg-slate-800 md:grid-cols-4">
+                {[
+                  ["Graph nodes", ingestionStatus.graph.node_count],
+                  ["Relationships", ingestionStatus.graph.relationship_count],
+                  ["Retained files", ingestionStatus.graph.file_count],
+                  ["Active / failed", `${ingestionStatus.graph.parsing_files} / ${ingestionStatus.graph.failed_files}`],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-slate-950 px-5 py-4">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+                    <p className="mt-1 text-xl font-semibold text-white">{typeof value === "number" ? value.toLocaleString() : value}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
         <div className="flex flex-col lg:flex-row gap-8">
           
