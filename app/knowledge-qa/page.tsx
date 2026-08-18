@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "../components/Sidebar";
+import { getApiErrorMessage } from "../lib/api-error";
 import {
   type Brain,
   type EvidenceRef,
@@ -121,7 +122,9 @@ export default function KnowledgeQaPage() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.message || data.error || `Request failed (${res.status})`);
+      throw new Error(
+        getApiErrorMessage(data, `Request failed (${res.status})`),
+      );
     }
     return data;
   }
