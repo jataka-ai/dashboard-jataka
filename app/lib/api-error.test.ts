@@ -25,5 +25,14 @@ describe("getApiErrorMessage", () => {
     expect(getApiErrorMessage({ message: { nested: true } }, "Try again")).toBe(
       "Try again",
     );
+    expect(getApiErrorMessage({ message: "[object Object]" }, "Try again")).toBe(
+      "Try again",
+    );
+    expect(
+      getApiErrorMessage(
+        { message: { error: "Knowledge service could not be reached." } },
+        "Try again",
+      ),
+    ).toBe("Knowledge service could not be reached.");
   });
 });

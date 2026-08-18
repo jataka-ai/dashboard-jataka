@@ -181,13 +181,14 @@ export default function KnowledgeQaPage() {
         },
       ]);
     } catch (e: unknown) {
-      setError(getErrorMessage(e, "Could not answer this question."));
+      const errorMessage = getErrorMessage(e, "Could not answer this question.");
+      setError(errorMessage);
       setTurns((prev) => [
         ...prev,
         {
           id: `local-err-${Date.now()}`,
           role: "assistant",
-          text: "Something went wrong while querying the knowledge base. Try again in a moment.",
+          text: errorMessage,
           at: new Date().toISOString(),
           shouldEscalate: true,
           reason: "request_failed",

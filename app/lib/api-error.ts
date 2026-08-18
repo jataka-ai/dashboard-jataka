@@ -1,5 +1,5 @@
 export function getApiErrorMessage(value: unknown, fallback: string): string {
-  if (value instanceof Error && value.message && value.message !== "[object Object]") {
+  if (value instanceof Error && isUsefulMessage(value.message)) {
     return value.message;
   }
 
@@ -11,7 +11,7 @@ export function getApiErrorMessage(value: unknown, fallback: string): string {
       ? (value as { response: { data: unknown } }).response.data
       : value;
 
-  if (typeof responseData === "string" && responseData.trim()) {
+  if (typeof responseData === "string" && isUsefulMessage(responseData)) {
     return responseData;
   }
   if (!responseData || typeof responseData !== "object") {
@@ -19,7 +19,7 @@ export function getApiErrorMessage(value: unknown, fallback: string): string {
   }
 
   const payload = responseData as Record<string, unknown>;
-  if (typeof payload.message === "string" && payload.message.trim()) {
+  if (typeof payload.message === "string" && isUsefulMessage(payload.message)) {
     return payload.message;
   }
   if (Array.isArray(payload.message)) {
@@ -31,5 +31,16 @@ export function getApiErrorMessage(value: unknown, fallback: string): string {
   if (typeof payload.error === "string" && payload.error.trim()) {
     return payload.error;
   }
+  if (payload.message && typeof payload.message === "object") {
+    return getApiErrorMessage(payload.message, fallback);
+  }
+  if (payload.error && typeof payload.error === "object") {
+    return getApiErrorMessage(payload.error, fallback);
+  }
   return fallback;
+}
+
+function isUsefulMessage(value: string): boolean {
+  const normalized = value.trim();
+  return Boolean(normalized) && normalized !== "[object Object]";
 }
