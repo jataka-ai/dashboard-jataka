@@ -147,6 +147,9 @@ export default function KnowledgeQaPage() {
     setError("");
     setLoading(true);
     setDraft("");
+    const previousQuestion = [...turns]
+      .reverse()
+      .find((turn) => turn.role === "user")?.text;
     const optimisticUser: ChatTurn = {
       id: `local-user-${Date.now()}`,
       role: "user",
@@ -160,6 +163,7 @@ export default function KnowledgeQaPage() {
         method: "POST",
         body: JSON.stringify({
           question,
+          previousQuestion,
           curriculumId: activeKnowledgeBaseId,
           topK: 5,
         }),
