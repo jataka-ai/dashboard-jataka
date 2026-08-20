@@ -70,9 +70,9 @@ type ChatTurn =
     };
 
 const STARTERS = [
-  "What does QuickAccountController.createAccount do?",
-  "Why is Publish greyed out on Spanish Knowledge drafts?",
-  "How do I attach a Knowledge article to a Case and email the customer?",
+  "How many flows do we have? Name all of them.",
+  "What Apex triggers do we have? Name all of them.",
+  "Show the flows connected to Account and explain how they relate to it.",
 ];
 
 function evidenceIcon(type?: string) {
