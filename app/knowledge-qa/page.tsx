@@ -70,7 +70,7 @@ type ChatTurn =
     };
 
 const STARTERS = [
-  "How many flows do we have? Name all of them.",
+  "What flows do we have? Name all of them.",
   "What Apex triggers do we have? Name all of them.",
   "Show the flows connected to Account and explain how they relate to it.",
 ];
