@@ -103,6 +103,7 @@ export default function IntegrationsAndSetupPage() {
   const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null);
   const [checkingIngestionStatus, setCheckingIngestionStatus] = useState(false);
   const [ingestionStatusError, setIngestionStatusError] = useState<string | null>(null);
+  const [retryingGithubIngestion, setRetryingGithubIngestion] = useState(false);
 
   // --- Salesforce State ---
   const [salesforceConnections, setSalesforceConnections] = useState<SalesforceConnectionResponse[]>([]);
@@ -216,6 +217,32 @@ export default function IntegrationsAndSetupPage() {
       setIngestionStatusError(getErrorMessage(error));
     } finally {
       setCheckingIngestionStatus(false);
+    }
+  };
+
+  const retryGithubIngestion = async () => {
+    setRetryingGithubIngestion(true);
+    setIngestionStatusError(null);
+    try {
+      const token = await getToken();
+      if (!token || !BASE_API) throw new Error("Authentication is unavailable");
+      const response = await fetch(
+        `${BASE_API}/integrations/github/ingestion-retry`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to resume GitHub ingestion");
+      }
+      await checkUnifiedIngestionStatus();
+    } catch (error) {
+      console.error("Failed to resume GitHub ingestion", error);
+      setIngestionStatusError(getErrorMessage(error));
+    } finally {
+      setRetryingGithubIngestion(false);
     }
   };
 
@@ -580,6 +607,7 @@ export default function IntegrationsAndSetupPage() {
                   const percent = total > 0 ? Math.min(100, Math.round((source.processed / total) * 100)) : null;
                   const normalizedStatus = source.status.toUpperCase();
                   const running = ["RUNNING", "IN_PROGRESS", "PENDING", "QUEUED"].includes(normalizedStatus);
+                  const stalled = normalizedStatus === "STALLED";
                   const notStarted = ["NOT_STARTED", "UNKNOWN"].includes(normalizedStatus);
                   const SourceIcon = source.icon;
                   return (
@@ -592,7 +620,7 @@ export default function IntegrationsAndSetupPage() {
                             <p className="mt-0.5 text-xs text-slate-400">{source.detail}</p>
                           </div>
                         </div>
-                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wider ${running ? "bg-cyan-400/10 text-cyan-300" : notStarted ? "bg-slate-700 text-slate-300" : source.failed ? "bg-amber-400/10 text-amber-300" : "bg-emerald-400/10 text-emerald-300"}`}>
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wider ${running ? "bg-cyan-400/10 text-cyan-300" : stalled ? "bg-amber-400/10 text-amber-300" : notStarted ? "bg-slate-700 text-slate-300" : source.failed ? "bg-amber-400/10 text-amber-300" : "bg-emerald-400/10 text-emerald-300"}`}>
                           {running ? "INGESTING" : source.status.replaceAll("_", " ")}
                         </span>
                       </div>
@@ -601,8 +629,23 @@ export default function IntegrationsAndSetupPage() {
                       </div>
                       <div className="mt-2 flex justify-between text-xs text-slate-400">
                         <span>{source.processed.toLocaleString()}{total ? ` / ${total.toLocaleString()}` : " processed"}</span>
-                        <span>{percent === null ? (running ? "In progress" : notStarted ? "Not started" : "Complete") : `${percent}%`}{source.failed ? ` · ${source.failed} failed` : ""}</span>
+                        <span>{percent === null ? (running ? "In progress" : stalled ? "Stopped" : notStarted ? "Not started" : "Complete") : `${percent}%`}{source.failed ? ` · ${source.failed} failed` : ""}</span>
                       </div>
+                      {source.name === "GitHub repository" && stalled && (
+                        <button
+                          type="button"
+                          onClick={() => void retryGithubIngestion()}
+                          disabled={retryingGithubIngestion}
+                          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {retryingGithubIngestion ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                          Resume ingestion
+                        </button>
+                      )}
                     </article>
                   );
                 })}
