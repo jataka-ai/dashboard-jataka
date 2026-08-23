@@ -85,6 +85,48 @@ export interface SalesforceIngestionTrustResponse {
   benchmarkReadyChecks: Record<string, boolean>;
 }
 
+export interface SalesforceRecordContextResponse {
+  status: "NOT_STARTED" | "RUNNING" | "PARTIAL" | "COMPLETE" | string;
+  objects: {
+    discovered: number;
+    completed: number;
+    inaccessible: number;
+    failed: number;
+    running: number;
+    percentComplete: number;
+  };
+  records: {
+    current: number;
+    deleted: number;
+    stale: number;
+    relationships: number;
+  };
+  realtime: {
+    subscribedChannels: number;
+    inaccessibleChannels: number;
+    errorChannels: number;
+    lastEventAt: string | null;
+    channels: Array<{
+      channel: string;
+      status: string;
+      replayId: string | number | null;
+      lastEventAt: string | null;
+      lastError: string | null;
+    }>;
+  };
+  checkpoints: Array<{
+    objectType: string;
+    status: string;
+    queryable: boolean;
+    discoveredFields: number;
+    includedFields: number;
+    recordsScanned: number;
+    watermark: string | null;
+    lastReconciledAt: string | null;
+    lastError: string | null;
+  }>;
+}
+
 interface OAuthUrlResponse {
   url: string;
 }
@@ -134,6 +176,34 @@ export async function retrySalesforceIngestion(
     },
   );
   if (!response.ok) throw new Error("Failed to retry Salesforce ingestion");
+}
+
+export async function getSalesforceRecordContext(
+  authToken: string,
+): Promise<SalesforceRecordContextResponse> {
+  const response = await fetch(
+    `${BASE_API}/integrations/salesforce/record-context`,
+    {
+      headers: { Authorization: `Bearer ${authToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw new Error("Failed to load Salesforce record context");
+  return response.json();
+}
+
+export async function syncSalesforceRecordContext(
+  authToken: string,
+  forceFull = false,
+): Promise<void> {
+  const response = await fetch(
+    `${BASE_API}/integrations/salesforce/record-context/sync?forceFull=${forceFull}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    },
+  );
+  if (!response.ok) throw new Error("Failed to start Salesforce record sync");
 }
 
 /**

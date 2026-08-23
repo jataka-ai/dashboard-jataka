@@ -15,6 +15,8 @@ import {
   Trash2,
   Github,
   Cloud,
+  Database,
+  RadioTower,
   TerminalSquare,
   ChevronRight,
 } from "lucide-react";
@@ -30,12 +32,15 @@ import {
 import {
   getSalesforceStatus,
   getSalesforceIngestionTrust,
+  getSalesforceRecordContext,
   connectSalesforce,
   disconnectSalesforce,
   retrySalesforceIngestion,
   syncSalesforceSchema,
+  syncSalesforceRecordContext,
   type SalesforceConnectionResponse,
   type SalesforceIngestionTrustResponse,
+  type SalesforceRecordContextResponse,
 } from "../../lib/salesforce-api";
 import Sidebar from "../components/Sidebar";
 
@@ -113,6 +118,10 @@ export default function IntegrationsAndSetupPage() {
   const [ingestionTrust, setIngestionTrust] = useState<SalesforceIngestionTrustResponse | null>(null);
   const [checkingIngestionTrust, setCheckingIngestionTrust] = useState(false);
   const [retryingIngestion, setRetryingIngestion] = useState(false);
+  const [recordContext, setRecordContext] = useState<SalesforceRecordContextResponse | null>(null);
+  const [checkingRecordContext, setCheckingRecordContext] = useState(false);
+  const [syncingRecordContext, setSyncingRecordContext] = useState(false);
+  const [reconcilingRecordContext, setReconcilingRecordContext] = useState(false);
 
   // --- API Key State ---
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
@@ -171,6 +180,7 @@ export default function IntegrationsAndSetupPage() {
       checkJiraConnection();
       checkSalesforceConnection();
       checkIngestionTrust();
+      checkRecordContext();
       fetchKeys();
       
       const params = new URLSearchParams(window.location.search);
@@ -194,8 +204,10 @@ export default function IntegrationsAndSetupPage() {
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
     void checkUnifiedIngestionStatus();
+    void checkRecordContext();
     const interval = window.setInterval(() => {
       void checkUnifiedIngestionStatus();
+      void checkRecordContext();
     }, 5000);
     return () => window.clearInterval(interval);
   }, [isLoaded, isSignedIn]);
@@ -365,6 +377,34 @@ export default function IntegrationsAndSetupPage() {
       setIngestionTrust(null);
     } finally {
       setCheckingIngestionTrust(false);
+    }
+  };
+
+  const checkRecordContext = async () => {
+    setCheckingRecordContext(true);
+    try {
+      const token = await getToken();
+      setRecordContext(token ? await getSalesforceRecordContext(token) : null);
+    } catch (error) {
+      console.error("Failed to load Salesforce record context", error);
+      setRecordContext(null);
+    } finally {
+      setCheckingRecordContext(false);
+    }
+  };
+
+  const handleRecordContextSync = async (forceFull: boolean) => {
+    const token = await getToken();
+    if (!token) return;
+    const setBusy = forceFull ? setReconcilingRecordContext : setSyncingRecordContext;
+    setBusy(true);
+    try {
+      await syncSalesforceRecordContext(token, forceFull);
+      await checkRecordContext();
+    } catch (error) {
+      alert(`Failed to start record sync: ${getErrorMessage(error)}`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -771,8 +811,8 @@ export default function IntegrationsAndSetupPage() {
                     <h2 className="text-2xl font-bold flex items-center gap-3">
                       <Cloud className="w-7 h-7 text-blue-400" /> Connect Salesforce
                     </h2>
-                    <button onClick={() => { checkSalesforceConnection(); checkIngestionTrust(); }} disabled={checkingSalesforce || checkingIngestionTrust} className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors">
-                      <RefreshCw className={`w-3 h-3 ${checkingSalesforce || checkingIngestionTrust ? "animate-spin" : ""}`} /> Refresh Status
+                    <button onClick={() => { checkSalesforceConnection(); checkIngestionTrust(); checkRecordContext(); }} disabled={checkingSalesforce || checkingIngestionTrust || checkingRecordContext} className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors">
+                      <RefreshCw className={`w-3 h-3 ${checkingSalesforce || checkingIngestionTrust || checkingRecordContext ? "animate-spin" : ""}`} /> Refresh Status
                     </button>
                   </div>
                   <p className="text-slate-400 mb-6">
@@ -909,6 +949,98 @@ export default function IntegrationsAndSetupPage() {
                               Live benchmark: {ingestionTrust.benchmarkReadyChecks.observedRuntimeBenchmarkPassed ? "passed" : "evidence required"}
                             </span>
                           </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {isSfAdminConnected && (
+                    <div className="mb-6 rounded-xl border border-emerald-800/70 bg-slate-950 p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-400">
+                            <Database className="h-4 w-4" /> Live Record Context
+                          </p>
+                          <h3 className="mt-1 text-lg font-semibold text-white">
+                            {recordContext
+                              ? `${recordContext.status} · ${recordContext.objects.percentComplete}% authorized objects accounted for`
+                              : "No record baseline has been evidenced yet"}
+                          </h3>
+                          <p className="mt-1 max-w-2xl text-xs text-slate-400">
+                            Current values are materialized from an authorized baseline, kept fresh by Salesforce Change Data Capture, and periodically reconciled. Restricted objects remain explicit coverage outcomes.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleRecordContextSync(false)}
+                            disabled={syncingRecordContext || recordContext?.status === "RUNNING"}
+                            className="flex items-center gap-2 rounded-lg border border-emerald-700 bg-emerald-950/50 px-3 py-2 text-xs font-medium text-emerald-200 disabled:opacity-50"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${syncingRecordContext ? "animate-spin" : ""}`} />
+                            Resume incremental sync
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm("Run a full Salesforce record reconciliation? This may consume substantial API budget.")) {
+                                void handleRecordContextSync(true);
+                              }
+                            }}
+                            disabled={reconcilingRecordContext || recordContext?.status === "RUNNING"}
+                            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-200 disabled:opacity-50"
+                          >
+                            <Database className={`h-3.5 w-3.5 ${reconcilingRecordContext ? "animate-pulse" : ""}`} />
+                            Full reconciliation
+                          </button>
+                        </div>
+                      </div>
+
+                      {recordContext && (
+                        <>
+                          <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-all duration-500"
+                              style={{ width: `${Math.min(100, Math.max(0, recordContext.objects.percentComplete))}%` }}
+                            />
+                          </div>
+                          <div className="mt-2 flex justify-between text-[11px] text-slate-500">
+                            <span>{recordContext.objects.completed} complete · {recordContext.objects.inaccessible} inaccessible · {recordContext.objects.failed} failed</span>
+                            <span>{Math.max(0, 100 - recordContext.objects.percentComplete).toFixed(2)}% remaining</span>
+                          </div>
+
+                          <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+                            {[
+                              ["Current records", recordContext.records.current.toLocaleString()],
+                              ["Record links", recordContext.records.relationships.toLocaleString()],
+                              ["Deleted tombstones", recordContext.records.deleted.toLocaleString()],
+                              ["Stale records", recordContext.records.stale.toLocaleString()],
+                            ].map(([label, value]) => (
+                              <div key={label} className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                                <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-100">{value}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/70 p-3 text-xs">
+                            <RadioTower className="h-4 w-4 text-cyan-400" />
+                            <span className="text-slate-200">{recordContext.realtime.subscribedChannels} live CDC channels</span>
+                            <span className="text-slate-500">{recordContext.realtime.inaccessibleChannels} inaccessible</span>
+                            <span className={recordContext.realtime.errorChannels > 0 ? "text-rose-300" : "text-slate-500"}>
+                              {recordContext.realtime.errorChannels} errors
+                            </span>
+                            <span className="ml-auto text-slate-500">
+                              Last event: {recordContext.realtime.lastEventAt ? new Date(recordContext.realtime.lastEventAt).toLocaleString() : "Not observed"}
+                            </span>
+                          </div>
+
+                          {recordContext.objects.failed > 0 && (
+                            <div className="mt-4 rounded-lg border border-rose-800/60 bg-rose-950/20 p-3">
+                              <p className="text-xs font-semibold text-rose-300">Objects requiring attention</p>
+                              <p className="mt-1 text-xs text-rose-100/70">
+                                {recordContext.checkpoints.filter((checkpoint) => checkpoint.status === "FAILED").slice(0, 8).map((checkpoint) => checkpoint.objectType).join(", ")}
+                              </p>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
