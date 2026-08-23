@@ -1,7 +1,7 @@
 "use client";
 
 import { useUser, SignOutButton } from "@clerk/nextjs";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   LayoutDashboard,
   Network,
@@ -22,13 +22,26 @@ import {
   FileCheck2,
   GitCompareArrows,
   ChartNoAxesCombined,
+  UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   canViewRoiAnalytics,
   type DashboardRole,
 } from "../lib/dashboard-role";
+import {
+  DASHBOARD_PERSONAS,
+  DASHBOARD_PERSONA_LABELS,
+  DEFAULT_DASHBOARD_PERSONA,
+  getStoredDashboardPersona,
+  personaCanSeePath,
+  personaCanSeeRoute,
+  personaLandingRoute,
+  setStoredDashboardPersona,
+  subscribeToDashboardPersona,
+  type DashboardPersona,
+} from "../lib/dashboard-persona";
 
 interface SidebarProps {
   orgName: string;
@@ -38,9 +51,22 @@ interface SidebarProps {
 export default function Sidebar({ orgName, userRole }: SidebarProps) {
   const { user } = useUser();
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
+  const persona = useSyncExternalStore(
+    subscribeToDashboardPersona,
+    getStoredDashboardPersona,
+    () => DEFAULT_DASHBOARD_PERSONA,
+  );
 
-  const navItems = [
+  const changePersona = (nextPersona: DashboardPersona) => {
+    setStoredDashboardPersona(nextPersona);
+    if (!personaCanSeePath(nextPersona, pathname)) {
+      router.push(personaLandingRoute(nextPersona));
+    }
+  };
+
+  const allNavItems = [
     { label: "Overview", href: "/", icon: LayoutDashboard },
     { label: "Dependency Graph", href: "/dependency-graph", icon: Network },
     { label: "Active Tests", href: "/active-tests", icon: Activity },
@@ -68,6 +94,9 @@ export default function Sidebar({ orgName, userRole }: SidebarProps) {
     { label: "Integrations", href: "/integrations", icon: Plug },
     { label: "Audit Logs", href: "/audit-logs", icon: Activity },
   ];
+  const navItems = allNavItems.filter((item) =>
+    personaCanSeeRoute(persona, item.href),
+  );
 
   const initials = user?.firstName && user?.lastName
     ? `${user.firstName[0]}${user.lastName[0]}`
@@ -94,7 +123,7 @@ export default function Sidebar({ orgName, userRole }: SidebarProps) {
               {orgName || "Jataka"}
             </p>
             <p className="text-xs text-[var(--text-muted)] truncate capitalize">
-              {userRole ? userRole.toLowerCase() : "workspace"}
+              {DASHBOARD_PERSONA_LABELS[persona]} view
             </p>
           </div>
         )}
@@ -115,6 +144,50 @@ export default function Sidebar({ orgName, userRole }: SidebarProps) {
           >
             <ChevronsRight size={14} />
           </button>
+        )}
+      </div>
+
+      <div
+        className={`border-b border-[var(--border-default)] ${
+          collapsed ? "p-2" : "px-3 py-3"
+        }`}
+      >
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] text-[var(--accent-light)]"
+            title={`${DASHBOARD_PERSONA_LABELS[persona]} persona`}
+            aria-label={`Current persona: ${DASHBOARD_PERSONA_LABELS[persona]}`}
+          >
+            <UsersRound size={17} />
+          </button>
+        ) : (
+          <label className="block">
+            <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+              Dashboard persona
+            </span>
+            <div className="relative">
+              <UsersRound
+                size={15}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--accent-light)]"
+              />
+              <select
+                aria-label="Dashboard persona"
+                value={persona}
+                onChange={(event) =>
+                  changePersona(event.target.value as DashboardPersona)
+                }
+                className="w-full appearance-none rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] py-2 pl-9 pr-3 text-xs font-medium text-[var(--text-primary)] outline-none transition-colors hover:border-[var(--border-hover)] focus:border-[var(--accent)]"
+              >
+                {DASHBOARD_PERSONAS.map((option) => (
+                  <option key={option} value={option}>
+                    {DASHBOARD_PERSONA_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </label>
         )}
       </div>
 
