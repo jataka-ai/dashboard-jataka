@@ -52,6 +52,43 @@ type QaResponse = {
   curriculumName?: string;
   evidenceRefs?: EvidenceRef[];
   evidenceSnapshot?: EvidenceSnapshot;
+  answerMode?: string;
+  planId?: string | null;
+  claims?: Array<{ text: string; evidence_ids: string[] }>;
+  sources?: UnifiedSource[];
+  freshness?: string;
+  complete?: boolean;
+  ambiguity?: RetrievalAmbiguity;
+  resultSet?: RetrievalResultSet | null;
+};
+
+type UnifiedSource = {
+  id: string;
+  source: string;
+  label: string;
+  content?: string;
+  freshness?: string;
+  observed_at?: string | null;
+  complete?: boolean;
+};
+
+type RetrievalAmbiguity = {
+  unresolved?: boolean;
+  requested?: string | null;
+  reason?: string | null;
+  candidates?: Array<{
+    identity?: string;
+    display_name?: string;
+    score?: number;
+    matched_by?: string;
+  }>;
+};
+
+type RetrievalResultSet = {
+  total_count: number;
+  items: Array<Record<string, unknown>>;
+  complete: boolean;
+  next_cursor?: string | null;
 };
 
 type ChatTurn =
@@ -67,6 +104,15 @@ type ChatTurn =
       topScore?: number;
       evidenceRefs?: EvidenceRef[];
       evidenceSnapshot?: EvidenceSnapshot;
+      originalQuestion: string;
+      answerMode?: string;
+      planId?: string | null;
+      claims?: Array<{ text: string; evidence_ids: string[] }>;
+      sources?: UnifiedSource[];
+      freshness?: string;
+      complete?: boolean;
+      ambiguity?: RetrievalAmbiguity;
+      resultSet?: RetrievalResultSet | null;
     };
 
 const STARTERS = [
@@ -103,6 +149,7 @@ export default function KnowledgeQaPage() {
   const [error, setError] = useState("");
   const scrollerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const conversationIdRef = useRef(crypto.randomUUID());
 
   const activeKnowledgeBaseId = useMemo(
     () => resolveKnowledgeBaseId(brains, activeBrain),
@@ -130,6 +177,7 @@ export default function KnowledgeQaPage() {
   }
 
   function startFresh() {
+    conversationIdRef.current = crypto.randomUUID();
     setTurns([]);
     setDraft("");
     setError("");
@@ -166,6 +214,7 @@ export default function KnowledgeQaPage() {
           previousQuestion,
           curriculumId: activeKnowledgeBaseId,
           topK: 5,
+          conversationId: conversationIdRef.current,
         }),
       })) as QaResponse;
 
@@ -182,6 +231,15 @@ export default function KnowledgeQaPage() {
           topScore: data.topScore,
           evidenceRefs: data.evidenceRefs || [],
           evidenceSnapshot: data.evidenceSnapshot,
+          originalQuestion: question,
+          answerMode: data.answerMode,
+          planId: data.planId,
+          claims: data.claims || [],
+          sources: data.sources || [],
+          freshness: data.freshness,
+          complete: data.complete,
+          ambiguity: data.ambiguity,
+          resultSet: data.resultSet,
         },
       ]);
     } catch (e: unknown) {
@@ -196,8 +254,54 @@ export default function KnowledgeQaPage() {
           at: new Date().toISOString(),
           shouldEscalate: true,
           reason: "request_failed",
+          originalQuestion: question,
         },
       ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadMore(turnId: string) {
+    const turn = turns.find(
+      (value): value is Extract<ChatTurn, { role: "assistant" }> =>
+        value.id === turnId && value.role === "assistant",
+    );
+    const cursor = turn?.resultSet?.next_cursor;
+    if (!turn || !cursor || loading || !activeKnowledgeBaseId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = (await apiFetch("/auto-resolution/qa", {
+        method: "POST",
+        body: JSON.stringify({
+          question: turn.originalQuestion,
+          curriculumId: activeKnowledgeBaseId,
+          topK: 5,
+          conversationId: conversationIdRef.current,
+          resultCursor: cursor,
+        }),
+      })) as QaResponse;
+      setTurns((current) =>
+        current.map((value) =>
+          value.id === turnId && value.role === "assistant"
+            ? {
+                ...value,
+                resultSet: data.resultSet
+                  ? {
+                      ...data.resultSet,
+                      items: [
+                        ...(value.resultSet?.items || []),
+                        ...data.resultSet.items,
+                      ],
+                    }
+                  : value.resultSet,
+              }
+            : value,
+        ),
+      );
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Could not load the next result page."));
     } finally {
       setLoading(false);
     }
@@ -380,7 +484,94 @@ export default function KnowledgeQaPage() {
                                   {turn.reason.replaceAll("_", " ")}
                                 </span>
                               )}
+                              {turn.freshness && (
+                                <span className="rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-200">
+                                  {turn.freshness === "live" ? "Live now" : turn.freshness.replaceAll("_", " ")}
+                                </span>
+                              )}
+                              {typeof turn.complete === "boolean" && (
+                                <span className="text-[11px] text-slate-500">
+                                  {turn.complete ? "Complete result" : "More results available"}
+                                </span>
+                              )}
                             </div>
+
+                            {turn.ambiguity?.unresolved && (
+                              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-3 text-xs text-amber-100">
+                                <p className="font-medium">Choose a more specific match</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {(turn.ambiguity.candidates || []).slice(0, 5).map((candidate) => (
+                                    <button
+                                      key={candidate.identity || candidate.display_name}
+                                      type="button"
+                                      onClick={() =>
+                                        setDraft(candidate.identity || candidate.display_name || "")
+                                      }
+                                      className="rounded-lg border border-amber-300/25 bg-slate-950/30 px-2 py-1 text-left text-amber-50 hover:border-amber-200/60"
+                                    >
+                                      {candidate.display_name || candidate.identity}
+                                      {typeof candidate.score === "number"
+                                        ? ` · ${(candidate.score * 100).toFixed(0)}%`
+                                        : ""}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {!!turn.resultSet?.items.length && (
+                              <div className="rounded-xl border border-slate-800/80 bg-slate-950/35 p-3">
+                                <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                                  <span>
+                                    Showing {turn.resultSet.items.length} of {turn.resultSet.total_count}
+                                  </span>
+                                  <span>{turn.resultSet.complete ? "Complete" : "Paginated"}</span>
+                                </div>
+                                <div className="max-h-72 space-y-1 overflow-auto">
+                                  {turn.resultSet.items.map((item, index) => (
+                                    <pre
+                                      key={`${turn.id}-result-${index}`}
+                                      className="overflow-x-auto rounded-lg bg-slate-950/70 px-2 py-1.5 text-[10px] leading-4 text-slate-400"
+                                    >
+                                      {JSON.stringify(item, null, 2)}
+                                    </pre>
+                                  ))}
+                                </div>
+                                {turn.resultSet.next_cursor && (
+                                  <button
+                                    type="button"
+                                    onClick={() => loadMore(turn.id)}
+                                    disabled={loading}
+                                    className="mt-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-50"
+                                  >
+                                    Load more results
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {!!turn.sources?.length && (
+                              <details className="rounded-xl border border-slate-800/80 bg-slate-950/30 px-3 py-2">
+                                <summary className="cursor-pointer text-xs font-medium text-slate-300">
+                                  Sources and provenance ({turn.sources.length})
+                                </summary>
+                                <div className="mt-3 space-y-2">
+                                  {turn.sources.map((source) => (
+                                    <div key={source.id} className="rounded-lg border border-slate-800 px-3 py-2">
+                                      <div className="flex gap-2 text-[11px]">
+                                        <span className="font-medium text-slate-200">{source.label}</span>
+                                        <span className="ml-auto text-slate-500">{source.source.replaceAll("_", " ")}</span>
+                                      </div>
+                                      {source.content && (
+                                        <p className="mt-1 whitespace-pre-wrap text-[11px] leading-4 text-slate-500">
+                                          {source.content}
+                                        </p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
 
                             {!!turn.evidenceRefs?.length && (
                               <div className="space-y-2 pl-1">
