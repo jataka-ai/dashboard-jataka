@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  connectSalesforce,
   getSalesforceRecordContext,
+  resolveSalesforceEnvironment,
   syncSalesforceRecordContext,
 } from "./salesforce-api";
 
@@ -40,5 +42,46 @@ describe("Salesforce record context API", () => {
         headers: { Authorization: "Bearer token" },
       }),
     );
+  });
+});
+
+describe("Salesforce OAuth environment", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["https://customer.my.salesforce.com", "production"],
+    ["https://customer-dev-ed.my.salesforce.com", "production"],
+    ["https://customer--uat.sandbox.my.salesforce.com", "sandbox"],
+    ["https://cs42.salesforce.com", "sandbox"],
+  ] as const)("classifies %s as %s", (instanceUrl, expected) => {
+    expect(
+      resolveSalesforceEnvironment({
+        connected: false,
+        instance_url: instanceUrl,
+      }),
+    ).toBe(expected);
+  });
+
+  it("prefers an explicit environment from the connection contract", () => {
+    expect(
+      resolveSalesforceEnvironment({
+        connected: false,
+        environment: "sandbox",
+        instance_url: "https://customer.my.salesforce.com",
+      }),
+    ).toBe("sandbox");
+  });
+
+  it("sends the typed environment to the authorization endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: "https://test.salesforce.com/oauth" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { location: { href: "" } });
+
+    await connectSalesforce("token", "admin", "sandbox");
+
+    expect(fetchMock.mock.calls[0][0]).toContain("role=admin&env=sandbox");
   });
 });

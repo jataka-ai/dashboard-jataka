@@ -17,6 +17,32 @@ export interface SalesforceConnectionResponse {
   is_valid?: boolean;
   auth_error_message?: string | null;
   auth_expired_at?: string | null;
+  environment?: SalesforceEnvironment;
+}
+
+export type SalesforceEnvironment = "production" | "sandbox";
+
+export function resolveSalesforceEnvironment(
+  connection: SalesforceConnectionResponse,
+): SalesforceEnvironment {
+  if (connection.environment) return connection.environment;
+
+  try {
+    const hostname = new URL(
+      connection.instance_url || "",
+    ).hostname.toLowerCase();
+    if (
+      hostname === "test.salesforce.com" ||
+      hostname.endsWith(".sandbox.my.salesforce.com") ||
+      /^cs\d+\.(?:salesforce|my\.salesforce)\.com$/.test(hostname)
+    ) {
+      return "sandbox";
+    }
+  } catch {
+    // Existing rows may lack an instance URL; Salesforce OAuth defaults to production.
+  }
+
+  return "production";
 }
 
 export interface SalesforceIngestionTrustResponse {
@@ -71,6 +97,23 @@ export interface SalesforceIngestionTrustResponse {
       retryable: boolean;
     }> | null;
   };
+  strictCoverage?: {
+    strictComplete: boolean;
+    accounted: number;
+    total: number;
+    unaccounted: number;
+    dimensions: Record<
+      string,
+      {
+        total: number;
+        complete: number;
+        partial: number;
+        failed: number;
+        pending: number;
+        percent: number;
+      }
+    >;
+  } | null;
   latestBenchmark: null | {
     status: string;
     suiteVersion: string;
@@ -87,12 +130,16 @@ export interface SalesforceIngestionTrustResponse {
 
 export interface SalesforceRecordContextResponse {
   status: "NOT_STARTED" | "RUNNING" | "PARTIAL" | "COMPLETE" | string;
+  statusReadStatus?: "live" | "cached" | "stale";
+  snapshotAsOf?: string;
+  syncActive?: boolean;
   objects: {
     discovered: number;
     completed: number;
     inaccessible: number;
     failed: number;
     running: number;
+    pending: number;
     percentComplete: number;
   };
   records: {
@@ -210,19 +257,23 @@ export async function syncSalesforceRecordContext(
  * Initiate Salesforce OAuth flow
  * Gets the authorization URL from backend and redirects user to Salesforce
  */
-export async function connectSalesforce(authToken: string, role: string = 'admin', isSandbox: boolean = false): Promise<void> {
+export async function connectSalesforce(
+  authToken: string,
+  role: string = "admin",
+  environment: SalesforceEnvironment = "production",
+): Promise<void> {
   try {
-    // Determine the environment string to send to the backend
-    const env = isSandbox ? 'sandbox' : 'production';
-    
-    // Include &env= in the fetch URL
-    const response = await fetch(`${BASE_API}/integrations/salesforce/auth-url?role=${role}&env=${env}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
+    const params = new URLSearchParams({ role, env: environment });
+    const response = await fetch(
+      `${BASE_API}/integrations/salesforce/auth-url?${params.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
       },
-    });
+    );
 
     if (!response.ok) {
       const error = await response.json();

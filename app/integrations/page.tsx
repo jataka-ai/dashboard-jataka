@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   CheckCircle,
   Circle,
@@ -36,6 +36,7 @@ import {
   getSalesforceRecordContext,
   connectSalesforce,
   disconnectSalesforce,
+  resolveSalesforceEnvironment,
   retrySalesforceIngestion,
   syncSalesforceSchema,
   syncSalesforceRecordContext,
@@ -132,10 +133,18 @@ export default function IntegrationsAndSetupPage() {
   const [isSyncingDependencies, setIsSyncingDependencies] = useState(false);
   const [ingestionTrust, setIngestionTrust] =
     useState<SalesforceIngestionTrustResponse | null>(null);
+  const [ingestionTrustReadError, setIngestionTrustReadError] = useState(false);
+  const [ingestionTrustObservedAt, setIngestionTrustObservedAt] =
+    useState<Date | null>(null);
+  const ingestionTrustRequestId = useRef(0);
   const [checkingIngestionTrust, setCheckingIngestionTrust] = useState(false);
   const [retryingIngestion, setRetryingIngestion] = useState(false);
   const [recordContext, setRecordContext] =
     useState<SalesforceRecordContextResponse | null>(null);
+  const [recordContextReadError, setRecordContextReadError] = useState(false);
+  const [recordContextObservedAt, setRecordContextObservedAt] =
+    useState<Date | null>(null);
+  const recordContextRequestId = useRef(0);
   const [checkingRecordContext, setCheckingRecordContext] = useState(false);
   const [syncingRecordContext, setSyncingRecordContext] = useState(false);
   const [reconcilingRecordContext, setReconcilingRecordContext] =
@@ -248,6 +257,14 @@ export default function IntegrationsAndSetupPage() {
       void checkUnifiedIngestionStatus();
       void checkRecordContext();
     }, 5000);
+    return () => window.clearInterval(interval);
+  }, [isLoaded, isSignedIn]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    const interval = window.setInterval(() => {
+      void checkIngestionTrust();
+    }, 30_000);
     return () => window.clearInterval(interval);
   }, [isLoaded, isSignedIn]);
 
@@ -461,29 +478,47 @@ export default function IntegrationsAndSetupPage() {
   };
 
   const checkIngestionTrust = async () => {
+    const requestId = ++ingestionTrustRequestId.current;
     setCheckingIngestionTrust(true);
     try {
       const token = await getToken();
-      setIngestionTrust(
-        token ? await getSalesforceIngestionTrust(token) : null,
-      );
+      if (!token) throw new Error("Authentication unavailable");
+      const response = await getSalesforceIngestionTrust(token);
+      if (requestId !== ingestionTrustRequestId.current) return;
+      setIngestionTrust(response);
+      setIngestionTrustObservedAt(new Date());
+      setIngestionTrustReadError(false);
     } catch {
-      setIngestionTrust(null);
+      if (requestId === ingestionTrustRequestId.current) {
+        setIngestionTrustReadError(true);
+      }
     } finally {
-      setCheckingIngestionTrust(false);
+      if (requestId === ingestionTrustRequestId.current) {
+        setCheckingIngestionTrust(false);
+      }
     }
   };
 
   const checkRecordContext = async () => {
+    const requestId = ++recordContextRequestId.current;
     setCheckingRecordContext(true);
     try {
       const token = await getToken();
-      setRecordContext(token ? await getSalesforceRecordContext(token) : null);
+      if (!token) throw new Error("Authentication unavailable");
+      const response = await getSalesforceRecordContext(token);
+      if (requestId !== recordContextRequestId.current) return;
+      setRecordContext(response);
+      setRecordContextObservedAt(new Date());
+      setRecordContextReadError(false);
     } catch (error) {
       console.error("Failed to load Salesforce record context", error);
-      setRecordContext(null);
+      if (requestId === recordContextRequestId.current) {
+        setRecordContextReadError(true);
+      }
     } finally {
-      setCheckingRecordContext(false);
+      if (requestId === recordContextRequestId.current) {
+        setCheckingRecordContext(false);
+      }
     }
   };
 
@@ -520,10 +555,10 @@ export default function IntegrationsAndSetupPage() {
 
   const handleConnectSalesforce = async (
     role: string,
-    isSandbox: boolean = false,
+    environment: "production" | "sandbox" = "production",
   ) => {
     const token = await getToken();
-    if (token) await connectSalesforce(token, role, isSandbox);
+    if (token) await connectSalesforce(token, role, environment);
   };
 
   // 👇 ADD THIS NEW FUNCTION 👇
@@ -1255,7 +1290,10 @@ export default function IntegrationsAndSetupPage() {
                                   {isExpired && (
                                     <button
                                       onClick={() =>
-                                        handleConnectSalesforce(role.id, true)
+                                        handleConnectSalesforce(
+                                          role.id,
+                                          resolveSalesforceEnvironment(conn),
+                                        )
                                       }
                                       className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-medium transition whitespace-nowrap"
                                     >
@@ -1275,7 +1313,10 @@ export default function IntegrationsAndSetupPage() {
                                 <div className="flex gap-2">
                                   <button
                                     onClick={() =>
-                                      handleConnectSalesforce(role.id, false)
+                                      handleConnectSalesforce(
+                                        role.id,
+                                        "production",
+                                      )
                                     }
                                     className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition whitespace-nowrap"
                                   >
@@ -1283,7 +1324,10 @@ export default function IntegrationsAndSetupPage() {
                                   </button>
                                   <button
                                     onClick={() =>
-                                      handleConnectSalesforce(role.id, true)
+                                      handleConnectSalesforce(
+                                        role.id,
+                                        "sandbox",
+                                      )
                                     }
                                     className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white border border-slate-600 rounded-lg text-sm font-medium transition whitespace-nowrap"
                                   >
@@ -1305,15 +1349,27 @@ export default function IntegrationsAndSetupPage() {
                               Ingestion Trust Manifest
                             </p>
                             <h3 className="mt-1 text-lg font-semibold text-white">
-                              {ingestionTrust?.latestRun
-                                ? `${ingestionTrust.latestRun.status} · ${ingestionTrust.latestRun.coverageSummary?.accessibleContextPercent ?? 0}% accessible context`
+                              {ingestionTrustReadError && !ingestionTrust
+                                ? "Ingestion status temporarily unavailable"
+                                : ingestionTrust?.latestRun
+                                  ? `${ingestionTrust.latestRun.status} · ${ingestionTrust.latestRun.status === "SUCCEEDED" && ingestionTrust.strictCoverage?.strictComplete ? "strict coverage verified" : ingestionTrust.latestRun.status === "RUNNING" ? "coverage verification pending" : "coverage gaps remain"}`
                                 : "No evidenced ingestion run yet"}
                             </h3>
+                            {ingestionTrustReadError && ingestionTrust && (
+                              <p className="mt-1 text-xs text-amber-300">
+                                Status read unavailable. Showing last verified snapshot
+                                {ingestionTrustObservedAt
+                                  ? ` from ${ingestionTrustObservedAt.toLocaleTimeString()}`
+                                  : ""}
+                                ; current coverage is unverified.
+                              </p>
+                            )}
                             <p className="mt-1 max-w-xl text-xs text-slate-400">
-                              Coverage measures metadata accessible to this
-                              OAuth principal. Salesforce-restricted objects and
-                              binary assets are evidenced separately, never
-                              claimed as indexed.
+                              Coverage is measured separately for capture,
+                              projection, reconciliation, live read, temporal
+                              history, authorization, and freshness. Restricted
+                              and binary sources are accounted for, not claimed
+                              as indexed.
                             </p>
                           </div>
                           <button
@@ -1333,6 +1389,39 @@ export default function IntegrationsAndSetupPage() {
 
                         {ingestionTrust?.latestRun && (
                           <>
+                            {ingestionTrust.strictCoverage ? (
+                              <div className="mt-5 rounded-lg border border-slate-700 bg-slate-900/70 p-3">
+                                <p className="text-xs text-slate-300">
+                                  Ledger accounted: {ingestionTrust.strictCoverage.accounted.toLocaleString()} / {ingestionTrust.strictCoverage.total.toLocaleString()}
+                                  {ingestionTrust.strictCoverage.unaccounted > 0
+                                    ? ` · ${ingestionTrust.strictCoverage.unaccounted.toLocaleString()} unaccounted`
+                                    : ""}
+                                </p>
+                                <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                                  {Object.entries(ingestionTrust.strictCoverage.dimensions).map(
+                                    ([name, dimension]) => (
+                                      <div key={name} className="rounded border border-slate-700 px-2 py-1.5">
+                                        <p className="text-slate-400">
+                                          {name.replace(/([A-Z])/g, " $1").toLowerCase()}
+                                        </p>
+                                        <p className="font-semibold text-slate-100">
+                                          {dimension.percent}%
+                                        </p>
+                                        {(dimension.partial + dimension.failed + dimension.pending) > 0 && (
+                                          <p className="text-amber-300">
+                                            {dimension.partial} partial · {dimension.failed} failed · {dimension.pending} pending
+                                          </p>
+                                        )}
+                                      </div>
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="mt-4 text-xs text-amber-300">
+                                Strict coverage evidence is unavailable; the run is not verified complete.
+                              </p>
+                            )}
                             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
                               {[
                                 [
@@ -1442,10 +1531,25 @@ export default function IntegrationsAndSetupPage() {
                               Context
                             </p>
                             <h3 className="mt-1 text-lg font-semibold text-white">
-                              {recordContext
+                              {recordContextReadError && !recordContext
+                                ? "Record context status temporarily unavailable"
+                                : recordContext
                                 ? `${recordContext.status} · ${recordContext.objects.percentComplete}% authorized objects accounted for`
                                 : "No record baseline has been evidenced yet"}
                             </h3>
+                            {(recordContextReadError ||
+                              recordContext?.statusReadStatus === "stale") &&
+                              recordContext && (
+                              <p className="mt-1 text-xs text-amber-300">
+                                Status read unavailable. Showing last verified snapshot
+                                {recordContext.snapshotAsOf
+                                  ? ` from ${new Date(recordContext.snapshotAsOf).toLocaleTimeString()}`
+                                  : recordContextObservedAt
+                                    ? ` from ${recordContextObservedAt.toLocaleTimeString()}`
+                                  : ""}
+                                ; current record freshness is unverified.
+                              </p>
+                            )}
                             <p className="mt-1 max-w-2xl text-xs text-slate-400">
                               Current values are materialized from an authorized
                               baseline, kept fresh by Salesforce Change Data
@@ -1505,8 +1609,9 @@ export default function IntegrationsAndSetupPage() {
                               <span>
                                 {recordContext.objects.completed} complete ·{" "}
                                 {recordContext.objects.inaccessible}{" "}
-                                inaccessible · {recordContext.objects.failed}{" "}
-                                failed
+                                inaccessible · {recordContext.objects.running}{" "}
+                                running · {recordContext.objects.pending ?? 0}{" "}
+                                pending · {recordContext.objects.failed} failed
                               </span>
                               <span>
                                 {Math.max(
@@ -1516,6 +1621,42 @@ export default function IntegrationsAndSetupPage() {
                                 % remaining
                               </span>
                             </div>
+
+                            {(recordContext.objects.running > 0 ||
+                              (recordContext.objects.pending ?? 0) > 0) && (
+                              <div className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3">
+                                <p className="text-xs font-semibold text-amber-200">
+                                  Unfinished object checkpoints
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {recordContext.checkpoints
+                                    .filter((checkpoint) =>
+                                      ["RUNNING", "PENDING"].includes(
+                                        checkpoint.status,
+                                      ),
+                                    )
+                                    .slice(0, 8)
+                                    .map((checkpoint) => (
+                                      <span
+                                        key={checkpoint.objectType}
+                                        className="rounded border border-amber-800/50 px-2 py-1 text-[11px] text-amber-100"
+                                      >
+                                        {checkpoint.objectType} · {checkpoint.status.toLowerCase()}
+                                      </span>
+                                    ))}
+                                  {recordContext.objects.running +
+                                    (recordContext.objects.pending ?? 0) >
+                                    8 && (
+                                    <span className="text-[11px] text-amber-200/70">
+                                      +
+                                      {recordContext.objects.running +
+                                        (recordContext.objects.pending ?? 0) -
+                                        8} more
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
 
                             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
                               {[
