@@ -1,0 +1,29 @@
+substitutions:
+  _IMAGE: asia-south1-docker.pkg.dev/$PROJECT_ID/one-backend/dashboard-jataka:latest
+  _NEXT_PUBLIC_API_BASE_URL: https://api.jataka.io/api
+  _NEXT_PUBLIC_API_URL: https://api.jataka.io/api
+  _NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ""
+  _NEXT_PUBLIC_GITHUB_APP_NAME: jataka-ai
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - NEXT_PUBLIC_API_BASE_URL=${_NEXT_PUBLIC_API_BASE_URL}
+      - --build-arg
+      - NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}
+      - --build-arg
+      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+      - --build-arg
+      - NEXT_PUBLIC_GITHUB_APP_NAME=${_NEXT_PUBLIC_GITHUB_APP_NAME}
+      - --tag
+      - ${_IMAGE}
+      - .
+
+images:
+  - ${_IMAGE}
+
+options:
+  dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY

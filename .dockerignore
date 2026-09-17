@@ -1,0 +1,10 @@
+.clerk
+.env*
+.git
+.github
+.next
+.vercel
+coverage
+node_modules
+npm-debug.log*
+tsconfig.tsbuildinfo
